@@ -692,7 +692,7 @@ BOT_ID = None
 
 async def initialize_client():
     """Initialize Telethon client."""
-    global client, BOT_ID
+    global client, BOT_ID, START_TIME
     
     try:
         api_id = int(PYRO_API_ID)
@@ -716,7 +716,7 @@ async def initialize_client():
 
 
 # ===================================================================
-# COMMAND HANDLERS
+# COMMAND HANDLERS - BASIC
 # ===================================================================
 
 @client.on(events.NewMessage(pattern='/start', func=lambda e: e.is_private))
@@ -727,8 +727,19 @@ async def handle_start(event):
         return
     
     text = """
-Envía enlaces de descarga (HTTP, magnet, .torrent).
-El bot descargará, procesará y subirá los archivos.
+<b>🤖 TeraBot - Sistema de Descargas Inteligente</b>
+
+Envía enlaces de descarga:
+• 🌐 HTTP/HTTPS (enlaces directos)
+• 🧲 Magnet links (torrents)
+• 📦 .torrent files
+
+El bot descargará, procesará y subirá los archivos automáticamente.
+
+<b>Comandos disponibles:</b>
+/help - Ver todos los comandos
+/status - Estado del sistema
+/uptime - Tiempo de actividad
 """
     await reply_message(event.message, text)
 
@@ -741,12 +752,34 @@ async def handle_help(event):
         return
     
     lines = [
-        "Comandos disponibles:",
-        "/start - Mostrar instrucciones",
-        "/status - Ver estado del sistema",
-        "/ls - Listar archivos",
+        "<b>📋 Comandos Disponibles:</b>",
+        "",
+        "<b>Información:</b>",
+        "/start - Instrucciones iniciales",
+        "/status - Estado del sistema",
+        "/uptime - Tiempo de actividad del bot",
+        "/help - Esta ayuda",
+        "",
+        "<b>Gestión de Archivos:</b>",
+        "/ls - Listar archivos en directorio actual",
         "/pwd - Mostrar directorio actual",
-        "/help - Mostrar esta ayuda",
+        "/cd &lt;path&gt; - Cambiar directorio",
+        "/mkdir &lt;name&gt; - Crear carpeta",
+        "/rm &lt;name&gt; - Eliminar archivo/carpeta",
+        "/mv &lt;old&gt; &lt;new&gt; - Mover/renombrar",
+        "/cp &lt;src&gt; &lt;dst&gt; - Copiar",
+        "",
+        "<b>Compresión:</b>",
+        "/zip &lt;name&gt; - Comprimir en ZIP",
+        "/unzip &lt;name&gt; - Descomprimir",
+        "",
+        "<b>Automator:</b>",
+        "/automator_on - Activar compresión automática",
+        "/automator_off - Desactivar compresión automática",
+        "/automator_status - Ver estado automator",
+        "",
+        "<b>Descarga:</b>",
+        "Envía URL, magnet o .torrent para descargar",
     ]
     await reply_message(event.message, "\n".join(lines))
 
@@ -764,11 +797,10 @@ async def handle_status(event):
             asyncio.to_thread(connect_jd),
             timeout=JD_API_TIMEOUT
         )
-        present = True
-        await reply_message(event.message, "Conectado al sistema de descargas. Dispositivo presente: sí.")
-    except Exception:
+        await reply_message(event.message, "✅ Sistema de descargas: <b>Conectado</b>\n\n🤖 Telethon: <b>Activo</b>\n\nTodo funcionando correctamente.")
+    except Exception as e:
         logger.exception("Status check failed")
-        await reply_message(event.message, "Error: no se pudo conectar al sistema de descargas.")
+        await reply_message(event.message, f"❌ Error: {str(e)}\n\nVerifica la conexión a JDownloader.")
     finally:
         if jd:
             try:
@@ -804,7 +836,478 @@ async def handle_uptime(event):
     parts.append(f"{seconds}s")
     
     uptime_str = " ".join(parts)
-    await reply_message(event.message, f"🤖 Tiempo de actividad del bot: **{uptime_str}**")
+    await reply_message(event.message, f"🤖 Tiempo de actividad del bot: <b>{uptime_str}</b>")
+
+
+# ===================================================================
+# COMMAND HANDLERS - FILE MANAGEMENT
+# ===================================================================
+
+@client.on(events.NewMessage(pattern='/pwd', func=lambda e: e.is_private))
+async def handle_pwd(event):
+    """Handle /pwd command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    try:
+        current = Path(current).resolve()
+        await reply_message(event.message, f"<code>{current}</code>")
+    except Exception as e:
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern='/ls', func=lambda e: e.is_private))
+async def handle_ls(event):
+    """Handle /ls command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        # Security check
+        if not str(current).startswith(str(user_root)):
+            current = user_root
+            CURRENT_DIRS[user_id] = current
+        
+        items = []
+        if current != user_root:
+            items.append("[↑ ..]")
+        
+        try:
+            for item in sorted(current.iterdir()):
+                try:
+                    if item.is_dir():
+                        items.append(f"📁 {item.name}/")
+                    else:
+                        size = item.stat().st_size
+                        items.append(f"📄 {item.name} ({human_size(size)})")
+                except Exception:
+                    items.append(f"❓ {item.name}")
+        except Exception as e:
+            await reply_message(event.message, f"❌ Error al leer directorio: {str(e)}")
+            return
+        
+        if not items:
+            items = ["(directorio vacío)"]
+        
+        text = f"<code>{current}</code>\n\n" + "\n".join(items[:50])
+        await reply_message(event.message, text)
+    except Exception as e:
+        logger.exception("ls error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/cd\s+(.+)', func=lambda e: e.is_private))
+async def handle_cd(event):
+    """Handle /cd command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    target = event.pattern_match.group(1).strip()
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        if target == "..":
+            if current != user_root:
+                current = current.parent
+        elif target.startswith("/"):
+            target_path = Path(target).resolve()
+        else:
+            target_path = (current / target).resolve()
+        
+        if target != ".." and not target.startswith("/"):
+            target_path = (current / target).resolve()
+        
+        # Security check
+        if not str(target_path).startswith(str(user_root)):
+            await reply_message(event.message, "❌ Acceso denegado: fuera de directorio permitido.")
+            return
+        
+        if not target_path.exists():
+            await reply_message(event.message, "❌ Ruta no existe.")
+            return
+        
+        if not target_path.is_dir():
+            await reply_message(event.message, "❌ No es un directorio.")
+            return
+        
+        CURRENT_DIRS[user_id] = target_path
+        await reply_message(event.message, f"✅ Directorio cambiado a:\n<code>{target_path}</code>")
+    except Exception as e:
+        logger.exception("cd error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/mkdir\s+(.+)', func=lambda e: e.is_private))
+async def handle_mkdir(event):
+    """Handle /mkdir command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    name = event.pattern_match.group(1).strip()
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        new_dir = (current / name).resolve()
+        
+        # Security check
+        if not str(new_dir).startswith(str(user_root)):
+            await reply_message(event.message, "❌ Acceso denegado.")
+            return
+        
+        new_dir.mkdir(parents=True, exist_ok=True)
+        await reply_message(event.message, f"✅ Carpeta creada: <code>{new_dir.name}</code>")
+    except Exception as e:
+        logger.exception("mkdir error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/rm\s+(.+)', func=lambda e: e.is_private))
+async def handle_rm(event):
+    """Handle /rm command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    name = event.pattern_match.group(1).strip()
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        target = (current / name).resolve()
+        
+        # Security check
+        if not str(target).startswith(str(user_root)):
+            await reply_message(event.message, "❌ Acceso denegado.")
+            return
+        
+        if not target.exists():
+            await reply_message(event.message, "❌ No existe.")
+            return
+        
+        if target.is_dir():
+            await asyncio.wait_for(
+                asyncio.to_thread(shutil.rmtree, target),
+                timeout=FILE_IO_TIMEOUT
+            )
+        else:
+            target.unlink()
+        
+        await reply_message(event.message, f"✅ Eliminado: <code>{target.name}</code>")
+    except Exception as e:
+        logger.exception("rm error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/mv\s+(\S+)\s+(.+)', func=lambda e: e.is_private))
+async def handle_mv(event):
+    """Handle /mv command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    old_name = event.pattern_match.group(1).strip()
+    new_name = event.pattern_match.group(2).strip()
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        old_path = (current / old_name).resolve()
+        new_path = (current / new_name).resolve()
+        
+        # Security check
+        if (not str(old_path).startswith(str(user_root)) or
+            not str(new_path).startswith(str(user_root))):
+            await reply_message(event.message, "❌ Acceso denegado.")
+            return
+        
+        if not old_path.exists():
+            await reply_message(event.message, "❌ No existe.")
+            return
+        
+        old_path.rename(new_path)
+        await reply_message(event.message, f"✅ Movido/renombrado a: <code>{new_path.name}</code>")
+    except Exception as e:
+        logger.exception("mv error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/cp\s+(\S+)\s+(.+)', func=lambda e: e.is_private))
+async def handle_cp(event):
+    """Handle /cp command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    src_name = event.pattern_match.group(1).strip()
+    dst_name = event.pattern_match.group(2).strip()
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        src_path = (current / src_name).resolve()
+        dst_path = (current / dst_name).resolve()
+        
+        # Security check
+        if (not str(src_path).startswith(str(user_root)) or
+            not str(dst_path).startswith(str(user_root))):
+            await reply_message(event.message, "❌ Acceso denegado.")
+            return
+        
+        if not src_path.exists():
+            await reply_message(event.message, "❌ No existe.")
+            return
+        
+        if src_path.is_dir():
+            await asyncio.wait_for(
+                asyncio.to_thread(shutil.copytree, src_path, dst_path),
+                timeout=FILE_IO_TIMEOUT
+            )
+        else:
+            await asyncio.wait_for(
+                asyncio.to_thread(shutil.copy2, src_path, dst_path),
+                timeout=FILE_IO_TIMEOUT
+            )
+        
+        await reply_message(event.message, f"✅ Copiado a: <code>{dst_path.name}</code>")
+    except Exception as e:
+        logger.exception("cp error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+# ===================================================================
+# COMMAND HANDLERS - COMPRESSION
+# ===================================================================
+
+@client.on(events.NewMessage(pattern=r'/zip\s+(.+)', func=lambda e: e.is_private))
+async def handle_zip(event):
+    """Handle /zip command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    source_name = event.pattern_match.group(1).strip()
+    
+    async with ZIP_SEMAPHORE:
+        try:
+            current = Path(current).resolve()
+            user_root = user_root.resolve()
+            
+            source = (current / source_name).resolve()
+            
+            # Security check
+            if not str(source).startswith(str(user_root)):
+                await reply_message(event.message, "❌ Acceso denegado.")
+                return
+            
+            if not source.exists():
+                await reply_message(event.message, "❌ No existe.")
+                return
+            
+            progress_msg = await reply_message(event.message, "⏳ Iniciando compresión...")
+            
+            archive_name = f"{source.name}.zip"
+            archive_path = current / archive_name
+            
+            start_time = time.time()
+            
+            def compress_sync():
+                """Synchronous compression."""
+                with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    if source.is_dir():
+                        for root, dirs, files in os.walk(source):
+                            for file in files:
+                                file_path = Path(root) / file
+                                arcname = file_path.relative_to(source.parent)
+                                zf.write(file_path, arcname)
+                    else:
+                        zf.write(source, source.name)
+            
+            await asyncio.wait_for(
+                asyncio.to_thread(compress_sync),
+                timeout=FALLBACK_ZIP_TIMEOUT
+            )
+            
+            elapsed = time.time() - start_time
+            size = archive_path.stat().st_size
+            
+            text = f"✅ Archivo comprimido:\n<code>{archive_path.name}</code>\n\nTamaño: <b>{human_size(size)}</b>\nTiempo: <b>{_format_duration(elapsed)}</b>"
+            await edit_message(progress_msg, text)
+            
+        except asyncio.TimeoutError:
+            await edit_message(progress_msg, "❌ Timeout en compresión.")
+        except Exception as e:
+            logger.exception("zip error")
+            await edit_message(progress_msg, f"❌ Error: {str(e)}")
+
+
+@client.on(events.NewMessage(pattern=r'/unzip\s+(.+)', func=lambda e: e.is_private))
+async def handle_unzip(event):
+    """Handle /unzip command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    archive_name = event.pattern_match.group(1).strip()
+    
+    async with ZIP_SEMAPHORE:
+        try:
+            current = Path(current).resolve()
+            user_root = user_root.resolve()
+            
+            archive_path = (current / archive_name).resolve()
+            
+            # Security check
+            if not str(archive_path).startswith(str(user_root)):
+                await reply_message(event.message, "❌ Acceso denegado.")
+                return
+            
+            if not archive_path.exists() or not archive_path.is_file():
+                await reply_message(event.message, "❌ Archivo no existe.")
+                return
+            
+            progress_msg = await reply_message(event.message, "⏳ Iniciando descompresión...")
+            
+            # Intentar usar 'unar' si está disponible
+            use_unar = False
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(subprocess.run, ['which', 'unar'], capture_output=True),
+                    timeout=2
+                )
+                use_unar = result.returncode == 0
+            except Exception:
+                pass
+            
+            start_time = time.time()
+            
+            if use_unar:
+                # Usar unar para descompresión
+                try:
+                    cmd = ['unar', '-o', str(current), str(archive_path)]
+                    proc = await asyncio.wait_for(
+                        asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True),
+                        timeout=FALLBACK_ZIP_TIMEOUT
+                    )
+                    if proc.returncode != 0:
+                        raise RuntimeError(proc.stderr)
+                except Exception as e:
+                    logger.warning(f"unar failed: {e}, falling back to zipfile")
+                    use_unar = False
+            
+            if not use_unar:
+                # Usar zipfile como fallback
+                def extract_sync():
+                    with zipfile.ZipFile(archive_path, 'r') as zf:
+                        zf.extractall(current)
+                
+                await asyncio.wait_for(
+                    asyncio.to_thread(extract_sync),
+                    timeout=FALLBACK_ZIP_TIMEOUT
+                )
+            
+            elapsed = time.time() - start_time
+            
+            text = f"✅ Archivo descomprimido\nTiempo: <b>{_format_duration(elapsed)}</b>"
+            await edit_message(progress_msg, text)
+            
+        except asyncio.TimeoutError:
+            await edit_message(progress_msg, "❌ Timeout en descompresión.")
+        except Exception as e:
+            logger.exception("unzip error")
+            await edit_message(progress_msg, f"❌ Error: {str(e)}")
+
+
+# ===================================================================
+# COMMAND HANDLERS - AUTOMATOR
+# ===================================================================
+
+@client.on(events.NewMessage(pattern='/automator_on', func=lambda e: e.is_private))
+async def handle_automator_on(event):
+    """Handle /automator_on command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    await set_automator_enabled(user_id, True)
+    await reply_message(event.message, "✅ Automator <b>activado</b> para este usuario.\n\nLos archivos se comprimirán y subirán automáticamente.")
+
+
+@client.on(events.NewMessage(pattern='/automator_off', func=lambda e: e.is_private))
+async def handle_automator_off(event):
+    """Handle /automator_off command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    await set_automator_enabled(user_id, False)
+    await reply_message(event.message, "✅ Automator <b>desactivado</b> para este usuario.")
+
+
+@client.on(events.NewMessage(pattern='/automator_status', func=lambda e: e.is_private))
+async def handle_automator_status(event):
+    """Handle /automator_status command."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    user_id = event.sender_id
+    enabled = await get_automator_enabled(user_id)
+    status = "🟢 ACTIVADO" if enabled else "🔴 DESACTIVADO"
+    
+    text = f"<b>Estado del Automator:</b>\n\n{status}\n\nUsa /automator_on o /automator_off para cambiar."
+    await reply_message(event.message, text)
 
 
 # ===================================================================
@@ -882,12 +1385,113 @@ def get_device_direct(jd, identifier):
 
 
 # ===================================================================
+# DOWNLOAD HANDLER
+# ===================================================================
+
+@client.on(events.NewMessage(func=lambda e: e.is_private and (
+    e.text.startswith('http://') or e.text.startswith('https://') or 
+    e.text.startswith('magnet:') or e.text.endswith('.torrent'))))
+async def handle_download(event):
+    """Handle download requests."""
+    if not is_owner(event.sender_id):
+        await reply_message(event.message, "Acceso denegado.")
+        return
+    
+    link = event.text.strip()
+    user_id = event.sender_id
+    user_root = get_user_root_path(user_id)
+    current = CURRENT_DIRS.get(user_id, user_root)
+    
+    try:
+        current = Path(current).resolve()
+        user_root = user_root.resolve()
+        
+        # Create user root if doesn't exist
+        user_root.mkdir(parents=True, exist_ok=True)
+        
+        # Check disk quota
+        ok, msg = await check_user_quota(user_id)
+        if not ok:
+            await reply_message(event.message, msg)
+            return
+        
+        progress_msg = await reply_message(event.message, "⏳ Procesando descarga...")
+        
+        jd = None
+        try:
+            jd = await asyncio.wait_for(
+                asyncio.to_thread(connect_jd),
+                timeout=JD_API_TIMEOUT
+            )
+            
+            device = await asyncio.wait_for(
+                asyncio.to_thread(get_device_direct, jd, JD_DEVICE_NAME),
+                timeout=JD_API_TIMEOUT
+            )
+            
+            # Add download
+            if is_magnet(link):
+                logger.info(f"Adding magnet: {link[:50]}...")
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(device.downloads_add, link),
+                    timeout=JD_API_TIMEOUT
+                )
+            elif is_torrent_url(link):
+                logger.info(f"Downloading torrent from: {link[:50]}...")
+                # Download .torrent file
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(link, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        if resp.status == 200:
+                            torrent_data = await resp.read()
+                            result = await asyncio.wait_for(
+                                asyncio.to_thread(device.downloads_add, torrent_data),
+                                timeout=JD_API_TIMEOUT
+                            )
+                        else:
+                            raise RuntimeError(f"Failed to download torrent: {resp.status}")
+            else:
+                # Regular HTTP download
+                logger.info(f"Adding HTTP download: {link[:50]}...")
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(device.downloads_add, link),
+                    timeout=JD_API_TIMEOUT
+                )
+            
+            await edit_message(progress_msg, "✅ Descarga añadida a la cola de JDownloader.\n\nSe procesará automáticamente.")
+            
+        except Exception as e:
+            logger.exception(f"Download error: {e}")
+            await edit_message(progress_msg, f"❌ Error en descarga: {str(e)}")
+        finally:
+            if jd:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(jd.disconnect),
+                        timeout=JD_API_TIMEOUT
+                    )
+                except Exception:
+                    pass
+                    
+    except Exception as e:
+        logger.exception("handle_download error")
+        await reply_message(event.message, f"❌ Error: {str(e)}")
+
+
+# ===================================================================
 # GRACEFUL SHUTDOWN
 # ===================================================================
 
 async def graceful_shutdown(signum=None, frame=None):
     """Graceful shutdown handler."""
     logger.info("Received shutdown signal, cleaning up...")
+    
+    # Save state
+    try:
+        save_persistent_state()
+        logger.info("Persistent state saved")
+    except Exception as e:
+        logger.exception(f"Failed to save state: {e}")
+    
     tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
     for task in tasks:
         task.cancel()
